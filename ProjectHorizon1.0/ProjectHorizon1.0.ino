@@ -3,8 +3,9 @@
 #include <Wire.h>
 #include <SoftwareSerial.h>
 
-//Accelerometer & Gyroscope
-Adafruit_LSM6DSO32 dso32;                 // Adafruit LSM6DS Library Use for Accelerometer
+//
+Adafruit_LSM6DSO32 dso32;    // Adafruit LSM6DS Library Use for Accelerometer
+SoftwareSerial MyBlue(2, 3); // RX | TX 
 
 // Calibration Variables
 float gyroX_offset = 0;
@@ -40,6 +41,8 @@ void LSM6DSO32Setup();
 ///////////////////////////////////////////////////////////////////////////////////////////////////////////////
 void setup(void) {
   Serial.begin(115200);
+  MyBlue.begin(115200); 
+
 
   while (!Serial) {
     delay(10);
@@ -59,6 +62,7 @@ void setup(void) {
 void loop() {
   /* Get new sensor events with the readings */
   sensors_event_t accel, gyro, temp;
+  unsigned long last_time = millis();
 
   dso32.getEvent(&accel, &gyro, &temp);
 
@@ -70,8 +74,16 @@ void loop() {
   current_error = gyro.gyro.z;
 
   while (state == prelaunch) {
-    if(sqrt(pow(accel.acceleration.x,2) + pow(accel.acceleration.y,2) + pow(accel.acceleration.z,2)) > launch_thresh){
+    if(sqrt(pow(accel.acceleration.x,2) + pow(accel.acceleration.y,2) + pow(accel.acceleration.z,2)) >= launch_thresh){
       state = launch;
+    }
+    //If 3 seconds have passed
+    if(last_time > 3000)
+    {
+      MyBlue.print("Temperature: ");
+      MyBlue.print(temp.temperature);
+      MyBlue.print(" °C");
+      MyBlue.println();
     }
   }
 
