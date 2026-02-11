@@ -74,9 +74,6 @@ void loop() {
   current_error = gyro.gyro.z;
 
   while (state == prelaunch) {
-    if(sqrt(pow(accel.acceleration.x,2) + pow(accel.acceleration.y,2) + pow(accel.acceleration.z,2)) >= launch_thresh){
-      state = launch;
-    }
     //If 3 seconds have passed
     if(last_time > 3000)
     {
@@ -84,6 +81,10 @@ void loop() {
       MyBlue.print(temp.temperature);
       MyBlue.print(" °C");
       MyBlue.println();
+    }
+
+    if(sqrt(pow(accel.acceleration.x,2) + pow(accel.acceleration.y,2) + pow(accel.acceleration.z,2)) >= launch_thresh){
+      state = launch;
     }
   }
 
