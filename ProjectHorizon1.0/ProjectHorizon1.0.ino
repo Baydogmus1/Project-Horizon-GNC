@@ -264,7 +264,7 @@ void calibrategyro() {
   Serial.println(gyroZ_offset);
 }
 
-int16_t PIDController(float error, float prev_error) {
+float PIDController(float error, float prev_error) {
   // Proportional gain
   prop_error = Kp * error;
   // Integral Error
