@@ -84,7 +84,7 @@ void loop() {
     }
 
     if(sqrt(pow(accel.acceleration.x,2) + pow(accel.acceleration.y,2) + pow(accel.acceleration.z,2)) >= launch_thresh){
-      state = launch;
+      state == launch;
     }
   }
 
