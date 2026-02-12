@@ -95,8 +95,8 @@ void loop() {
   gyro.gyro.y -= gyroY_offset;
   gyro.gyro.z -= gyroZ_offset;
 
-  float accRoll  = atan2(accel.acceleration.y, accel.acceleration.z) * 57.29578f;
-  float accPitch = atan2(-accel.acceleration.x, sqrt(pow(accel.acceleration.y,2) + pow(accel.acceleration.z, 2))) * 57.29578f;
+  float accRoll  = atan2(accel.acceleration.y, accel.acceleration.z);
+  float accPitch = atan2(-accel.acceleration.x, sqrt(pow(accel.acceleration.y,2) + pow(accel.acceleration.z, 2)));
 
   float roll  = Kalman_GetAngle(&KalmanX, accRoll, gyro.gyro.x, dt);
   float pitch = Kalman_GetAngle(&KalmanY, accPitch, gyro.gyro.y, dt);
@@ -104,7 +104,7 @@ void loop() {
 
   current_error = gyro.gyro.z;
 
-  while (state == prelaunch) {
+  if(state == prelaunch) {
     //If 3 seconds have passed
     if(last_time > 3000)
     {
@@ -124,16 +124,16 @@ void loop() {
     }
 
     if(sqrt(pow(accel.acceleration.x,2) + pow(accel.acceleration.y,2) + pow(accel.acceleration.z,2)) >= launch_thresh){
-      state == launch;
+      state = launch;
     }
   }
 
-  while(state == launch){
+  if(state == launch){
 
 
   }
 
-  while(state == coast) {
+  if(state == coast) {
     motor_control = PIDController(current_error, previous_error);
 
       if (motor_control < 1) {
