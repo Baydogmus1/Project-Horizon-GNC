@@ -311,6 +311,9 @@ float PIDController(float error, float prev_error) {
   integral_error = Ki * error;
   // Derivative Error
   derivative_error = Kd * (error - prev_error);
+
+  float control_output = prop_error + integral_error + derivative_error;
+  return control_output;
 }
 
 void Kalman_Init(Kalman_t *kf) {
@@ -327,7 +330,6 @@ void Kalman_Init(Kalman_t *kf) {
 }
 
 float Kalman_GetAngle(Kalman_t *kf, float newAngle, float newRate, float dt) {
-    // --- Step 1: Predict ---
     kf->rate = newRate - kf->bias;
     kf->angle += dt * kf->rate;
 
@@ -337,7 +339,6 @@ float Kalman_GetAngle(Kalman_t *kf, float newAngle, float newRate, float dt) {
     kf->P[1][0] -= dt * kf->P[1][1];
     kf->P[1][1] += kf->Q_bias * dt;
 
-    // --- Step 2: Update ---
     // Calculate Kalman Gain
     float S = kf->P[0][0] + kf->R_measure;
     float K[2];
