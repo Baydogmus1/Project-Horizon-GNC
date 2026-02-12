@@ -7,6 +7,30 @@
 Adafruit_LSM6DSO32 dso32;    // Adafruit LSM6DS Library Use for Accelerometer
 SoftwareSerial MyBlue(2, 3); // RX | TX 
 
+enum {
+  prelaunch,
+  launch,
+  coast,
+  descend
+} state = prelaunch;
+
+typedef struct {
+  float Q_angle;   // Process noise: Uncertainty in the angle evolution
+  float Q_bias;    // Process noise: Uncertainty in the gyro bias
+  float R_measure; // Measurement noise: Uncertainty in the accelerometer measure
+
+  float angle;     // The calculated angle (OUTPUT)
+  float bias;      // The calculated gyro bias
+  float rate;      // Unbiased rate
+
+  float P[2][2];   // Error covariance matrix
+} Kalman_t;
+
+// Kalman Filter
+Kalman_t KalmanX; // For Roll
+Kalman_t KalmanY; // For Pitch
+uint32_t timer;
+
 // Calibration Variables
 float gyroX_offset = 0;
 float gyroY_offset = 0;
@@ -27,16 +51,10 @@ float Kd = 2;
 
 float launch_thresh = 9.81 * 5; // Threshold for when sensor detects launch, g * Number
 
-
-enum {
-  prelaunch,
-  launch,
-  coast,
-  descend
-} state = prelaunch;
-
 float PIDController(float error);
 void LSM6DSO32Setup();
+void Kalman_Init(Kalman_t *kf);
+float Kalman_GetAngle(Kalman_t *kf, float newAngle, float newRate, float dt);
 
 ///////////////////////////////////////////////////////////////////////////////////////////////////////////////
 void setup(void) {
@@ -53,6 +71,11 @@ void setup(void) {
   LSM6DSO32Setup();
   calibrategyro();
 
+  // Initialize Kalman filter parameters
+    Kalman_Init(&KalmanX);
+    Kalman_Init(&KalmanY);
+    timer = micros(); // Start timer
+
   Serial.println("");\
 
   //Initialize Pin for motor direction control
@@ -60,15 +83,22 @@ void setup(void) {
 }
 
 void loop() {
-  /* Get new sensor events with the readings */
   sensors_event_t accel, gyro, temp;
   unsigned long last_time = millis();
+  double dt = (double)(micros() - timer) / 1000000.0;
+  timer = micros();
 
   dso32.getEvent(&accel, &gyro, &temp);
 
   gyro.gyro.x -= gyroX_offset;
   gyro.gyro.y -= gyroY_offset;
   gyro.gyro.z -= gyroZ_offset;
+
+  float accRoll  = atan2(accel.acceleration.y, accel.acceleration.z) * 57.29578f;
+  float accPitch = atan2(-accel.acceleration.x, sqrt(pow(accel.acceleration.y,2) + pow(accel.acceleration.z, 2))) * 57.29578f;
+
+  float roll  = Kalman_GetAngle(&KalmanX, accRoll, gyro.gyro.x, dt);
+  float pitch = Kalman_GetAngle(&KalmanY, accPitch, gyro.gyro.y, dt);
 
 
   current_error = gyro.gyro.z;
@@ -272,4 +302,54 @@ float PIDController(float error, float prev_error) {
   integral_error = Ki * error;
   // Derivative Error
   derivative_error = Kd * (error - prev_error);
+}
+
+void Kalman_Init(Kalman_t *kf) {
+    // Default tuning parameters
+    kf->Q_angle = 0.001f;
+    kf->Q_bias = 0.003f;
+    kf->R_measure = 0.03f;
+
+    kf->angle = 0.0f;
+    kf->bias = 0.0f;
+
+    kf->P[0][0] = 0.0f; kf->P[0][1] = 0.0f;
+    kf->P[1][0] = 0.0f; kf->P[1][1] = 0.0f;
+}
+
+float Kalman_GetAngle(Kalman_t *kf, float newAngle, float newRate, float dt) {
+    // --- Step 1: Predict ---
+    kf->rate = newRate - kf->bias;
+    kf->angle += dt * kf->rate;
+
+    // Update estimation error covariance
+    kf->P[0][0] += dt * (dt * kf->P[1][1] - kf->P[0][1] - kf->P[1][0] + kf->Q_angle);
+    kf->P[0][1] -= dt * kf->P[1][1];
+    kf->P[1][0] -= dt * kf->P[1][1];
+    kf->P[1][1] += kf->Q_bias * dt;
+
+    // --- Step 2: Update ---
+    // Calculate Kalman Gain
+    float S = kf->P[0][0] + kf->R_measure;
+    float K[2];
+    K[0] = kf->P[0][0] / S;
+    K[1] = kf->P[1][0] / S;
+
+    // Calculate Angle Difference (Measurement - Predicted)
+    float y = newAngle - kf->angle;
+
+    // Correct the state
+    kf->angle += K[0] * y;
+    kf->bias  += K[1] * y;
+
+    // Update error covariance
+    float P00_temp = kf->P[0][0];
+    float P01_temp = kf->P[0][1];
+
+    kf->P[0][0] -= K[0] * P00_temp;
+    kf->P[0][1] -= K[0] * P01_temp;
+    kf->P[1][0] -= K[1] * P00_temp;
+    kf->P[1][1] -= K[1] * P01_temp;
+
+    return kf->angle;
 }
