@@ -107,9 +107,18 @@ void loop() {
     //If 3 seconds have passed
     if(last_time > 3000)
     {
+      //Send state of the rocket
       MyBlue.print("Temperature: ");
       MyBlue.print(temp.temperature);
       MyBlue.print(" °C");
+      MyBlue.print("\t");
+      MyBlue.print("Roll Angle: ");
+      MyBlue.print(roll);
+      MyBlue.print("°");
+      MyBlue.print("\t");
+      MyBlue.print("Pitch Angle: ");
+      MyBlue.print(pitch);
+      MyBlue.print("°");
       MyBlue.println();
     }
 
