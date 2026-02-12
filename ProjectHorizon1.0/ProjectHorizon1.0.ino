@@ -91,15 +91,14 @@ void loop() {
 
   dso32.getEvent(&accel, &gyro, &temp);
 
-  gyro.gyro.x -= gyroX_offset;
-  gyro.gyro.y -= gyroY_offset;
-  gyro.gyro.z -= gyroZ_offset;
+  float gyroRateX = (gyro.gyro.x - gyroX_offset) * 57.29578f;
+  float gyroRateY = (gyro.gyro.y - gyroY_offset) * 57.29578f;
 
-  float accRoll  = atan2(accel.acceleration.y, accel.acceleration.z);
-  float accPitch = atan2(-accel.acceleration.x, sqrt(pow(accel.acceleration.y,2) + pow(accel.acceleration.z, 2)));
+  float accRoll  = atan2(accel.acceleration.y, accel.acceleration.z) * 57.29578f;
+  float accPitch = atan2(-accel.acceleration.x, sqrt(pow(accel.acceleration.y,2) + pow(accel.acceleration.z, 2))) * 57.29578f;
 
-  float roll  = Kalman_GetAngle(&KalmanX, accRoll, gyro.gyro.x, dt);
-  float pitch = Kalman_GetAngle(&KalmanY, accPitch, gyro.gyro.y, dt);
+  float roll  = Kalman_GetAngle(&KalmanX, accRoll, gyroRateX, dt);
+  float pitch = Kalman_GetAngle(&KalmanY, accPitch, gyroRateY, dt);
 
 
   current_error = gyro.gyro.z;
