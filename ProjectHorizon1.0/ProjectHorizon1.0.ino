@@ -57,7 +57,7 @@ void calibrategyro(); //Calibrates IMU gyro to deal with gyro drift
 void Kalman_Init(Kalman_t *kf); //Kalman filter initialization to determine roll and pitch angles
 float Kalman_GetAngle(Kalman_t *kf, float newAngle, float newRate, float dt); //Kalman filter  to determine roll and pitch angles
 
-///////////////////////////////////////////////////////////////////////////////////////////////////////////////
+///////////////// Main //////////////////////////////////////////////////////////////////////////////////////////////
 void setup(void) {
   Serial.begin(115200);
   MyBlue.begin(115200); 
@@ -150,6 +150,7 @@ void loop() {
   previous_error = current_error;
 }
 
+////////////////////// Functions ////////////////////////////////////////////////////////////
 void LSM6DSO32Setup() {
   if (!dso32.begin_I2C()) {
     // if (!dso32.begin_SPI(LSM_CS)) {
