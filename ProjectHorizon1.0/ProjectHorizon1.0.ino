@@ -51,10 +51,11 @@ float Kd = 2;
 
 float launch_thresh = 9.81 * 5; // Threshold for when sensor detects launch, g * Number
 
-float PIDController(float error);
-void LSM6DSO32Setup();
-void Kalman_Init(Kalman_t *kf);
-float Kalman_GetAngle(Kalman_t *kf, float newAngle, float newRate, float dt);
+float PIDController(float error); //calculates the motor controll signal
+void LSM6DSO32Setup(); //Sets up the IMU, chooses properties of IMU
+void calibrategyro(); //Calibrates IMU gyro to deal with gyro drift
+void Kalman_Init(Kalman_t *kf); //Kalman filter initialization to determine roll and pitch angles
+float Kalman_GetAngle(Kalman_t *kf, float newAngle, float newRate, float dt); //Kalman filter  to determine roll and pitch angles
 
 ///////////////////////////////////////////////////////////////////////////////////////////////////////////////
 void setup(void) {
