@@ -73,11 +73,11 @@ void setup(void) {
   calibrategyro();
 
   // Initialize Kalman filter parameters
-    Kalman_Init(&KalmanX);
-    Kalman_Init(&KalmanY);
-    timer = micros(); // Start timer
+  Kalman_Init(&KalmanX);
+  Kalman_Init(&KalmanY);
+  timer = micros(); // Start timer
 
-  Serial.println("");\
+  Serial.println("");
 
   //Initialize Pin for motor direction control
   pinMode(B11, OUTPUT);
