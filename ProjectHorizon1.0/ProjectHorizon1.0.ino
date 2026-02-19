@@ -94,6 +94,7 @@ void loop() {
   float gyroRateX = (gyro.gyro.x - gyroX_offset) * 57.29578f;
   float gyroRateY = (gyro.gyro.y - gyroY_offset) * 57.29578f;
 
+  float accel_mag =sqrt(pow(accel.acceleration.x,2) + pow(accel.acceleration.y,2) + pow(accel.acceleration.z,2));
   float accRoll  = atan2(accel.acceleration.y, accel.acceleration.z) * 57.29578f;
   float accPitch = atan2(-accel.acceleration.x, sqrt(pow(accel.acceleration.y,2) + pow(accel.acceleration.z, 2))) * 57.29578f;
 
@@ -102,28 +103,38 @@ void loop() {
 
   current_error = (gyro.gyro.z - gyroZ_offset) * 57.29578f;
 
-  if(state == prelaunch) {
-    //If 3 seconds have passed
-    if(last_time > 3000)
-    {
-      //Send state of the rocket
-      MyBlue.print("Temperature: ");
-      MyBlue.print(temp.temperature);
-      MyBlue.print(" °C");
-      MyBlue.print("\t");
-      MyBlue.print("Roll Angle: ");
-      MyBlue.print(roll);
-      MyBlue.print("°");
-      MyBlue.print("\t");
-      MyBlue.print("Pitch Angle: ");
-      MyBlue.print(pitch);
-      MyBlue.print("°");
-      MyBlue.println();
-    }
+  switch(state){
+    case prelaunch:
+      if(millis() - last_time > 1000)
+      {
+        // 2. Print Acceleration Data
+        MyBlue.print("Acc[X,Y,Z]: [");
+        MyBlue.print(accel.acceleration.x); MyBlue.print(", ");
+        MyBlue.print(accel.acceleration.y); MyBlue.print(", ");
+        MyBlue.print(accel.acceleration.z); MyBlue.print("]\t");
+        MyBlue.print("Mag: "); MyBlue.print(accel_mag); MyBlue.print("\t");
 
-    if(sqrt(pow(accel.acceleration.x,2) + pow(accel.acceleration.y,2) + pow(accel.acceleration.z,2)) >= launch_thresh){
-      state = launch;
-    }
+        // 3. Print Orientation & Temp
+        MyBlue.print("Temp: "); MyBlue.print(temp.temperature); MyBlue.print("°C\t");
+        MyBlue.print("Roll: "); MyBlue.print(roll); MyBlue.print("°\t");
+        MyBlue.print("Pitch: "); MyBlue.print(pitch); MyBlue.print("°\t");
+      }
+
+      // If in prelaunch, gravity magnitude should be ~9.81. If it's off by more than 2 m/s^2, flag it.
+      if (state == prelaunch && abs(accel_mag - 9.81) > 2.0) {
+       MyBlue.print("[FLAG: BAD_PAD_CALIBRATION] ");
+      }
+
+      if(accel_mag >= launch_thresh){
+        state = launch;
+      }
+    break;
+    case launch:
+    break;
+    case coast:
+    break;
+    case descend:
+    break;
   }
 
   if(state == launch){
