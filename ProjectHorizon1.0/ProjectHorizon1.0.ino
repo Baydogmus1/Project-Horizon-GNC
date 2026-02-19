@@ -100,8 +100,7 @@ void loop() {
   float roll  = Kalman_GetAngle(&KalmanX, accRoll, gyroRateX, dt);
   float pitch = Kalman_GetAngle(&KalmanY, accPitch, gyroRateY, dt);
 
-
-  current_error = gyro.gyro.z;
+  current_error = (gyro.gyro.z - gyroZ_offset) * 57.29578f;
 
   if(state == prelaunch) {
     //If 3 seconds have passed
