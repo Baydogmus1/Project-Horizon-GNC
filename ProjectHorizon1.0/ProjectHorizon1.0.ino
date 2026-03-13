@@ -1,11 +1,14 @@
 #include <Adafruit_LSM6DSO32.h>
 #include <Adafruit_Sensor.h>
 #include <Wire.h>
-#include <SoftwareSerial.h>
 
-//
+// ---------------------------------------------------------
+// Objects and Variables
+// ---------------------------------------------------------
 Adafruit_LSM6DSO32 dso32;    // Adafruit LSM6DS Library Use for Accelerometer
-SoftwareSerial MyBlue(2, 3); // RX | TX 
+
+// Instantiate Hardware Serial2 for Bluetooth (RX = PA3, TX = PA2)
+HardwareSerial Serial2(PA3, PA2);
 
 enum {
   prelaunch,
@@ -51,21 +54,24 @@ float Kd = 2;
 
 float launch_thresh = 9.81 * 5; // Threshold for when sensor detects launch, g * Number
 
-float PIDController(float error); //calculates the motor controll signal
-void LSM6DSO32Setup(); //Sets up the IMU, chooses properties of IMU
-void calibrategyro(); //Calibrates IMU gyro to deal with gyro drift
-void Kalman_Init(Kalman_t *kf); //Kalman filter initialization to determine roll and pitch angles
-float Kalman_GetAngle(Kalman_t *kf, float newAngle, float newRate, float dt); //Kalman filter  to determine roll and pitch angles
+// Function Prototypes
+float PIDController(float error, float prev_error); 
+void LSM6DSO32Setup(); 
+void calibrategyro(); 
+void Kalman_Init(Kalman_t *kf); 
+float Kalman_GetAngle(Kalman_t *kf, float newAngle, float newRate, float dt); 
 
-///////////////// Main //////////////////////////////////////////////////////////////////////////////////////////////
+// ---------------------------------------------------------
+// Main Setup
+// ---------------------------------------------------------
 void setup(void) {
-  Serial.begin(115200);
-  MyBlue.begin(115200); 
+  Serial.begin(115200);  // USB to PC
+  
+  // Start Hardware Serial2 for Bluetooth 
+  Serial2.begin(115200); 
 
-
-  while (!Serial) {
-    delay(10);
-  }
+  // Removed the 'while (!Serial)' trap so the rocket can run on battery!
+  delay(1000); // Give sensors a moment to power up
 
   // LSM connections and calibration
   Serial.println("LSM6DSO32 test!");
@@ -83,6 +89,9 @@ void setup(void) {
   pinMode(B11, OUTPUT);
 }
 
+// ---------------------------------------------------------
+// Main Loop
+// ---------------------------------------------------------
 void loop() {
   sensors_event_t accel, gyro, temp;
   unsigned long last_time = millis();
@@ -94,7 +103,7 @@ void loop() {
   float gyroRateX = (gyro.gyro.x - gyroX_offset) * 57.29578f;
   float gyroRateY = (gyro.gyro.y - gyroY_offset) * 57.29578f;
 
-  float accel_mag =sqrt(pow(accel.acceleration.x,2) + pow(accel.acceleration.y,2) + pow(accel.acceleration.z,2));
+  float accel_mag = sqrt(pow(accel.acceleration.x,2) + pow(accel.acceleration.y,2) + pow(accel.acceleration.z,2));
   float accRoll  = atan2(accel.acceleration.y, accel.acceleration.z) * 57.29578f;
   float accPitch = atan2(-accel.acceleration.x, sqrt(pow(accel.acceleration.y,2) + pow(accel.acceleration.z, 2))) * 57.29578f;
 
@@ -107,38 +116,40 @@ void loop() {
     case prelaunch:
       if(millis() - last_time > 1000)
       {
-        // 2. Print Acceleration Data
-        MyBlue.print("Acc[X,Y,Z]: [");
-        MyBlue.print(accel.acceleration.x); MyBlue.print(", ");
-        MyBlue.print(accel.acceleration.y); MyBlue.print(", ");
-        MyBlue.print(accel.acceleration.z); MyBlue.print("]\t");
-        MyBlue.print("Mag: "); MyBlue.print(accel_mag); MyBlue.print("\t");
+        // 2. Print Acceleration Data to Bluetooth
+        Serial2.print("Acc[X,Y,Z]: [");
+        Serial2.print(accel.acceleration.x); Serial2.print(", ");
+        Serial2.print(accel.acceleration.y); Serial2.print(", ");
+        Serial2.print(accel.acceleration.z); Serial2.print("]\t");
+        Serial2.print("Mag: "); Serial2.print(accel_mag); Serial2.print("\t");
 
-        // 3. Print Orientation & Temp
-        MyBlue.print("Temp: "); MyBlue.print(temp.temperature); MyBlue.print("°C\t");
-        MyBlue.print("Roll: "); MyBlue.print(roll); MyBlue.print("°\t");
-        MyBlue.print("Pitch: "); MyBlue.print(pitch); MyBlue.print("°\t");
+        // 3. Print Orientation & Temp to Bluetooth
+        Serial2.print("Temp: "); Serial2.print(temp.temperature); Serial2.print("C\t");
+        Serial2.print("Roll: "); Serial2.print(roll); Serial2.print("\t");
+        Serial2.println("Pitch: "); Serial2.print(pitch); Serial2.print("\t");
       }
 
       // If in prelaunch, gravity magnitude should be ~9.81. If it's off by more than 2 m/s^2, flag it.
       if (state == prelaunch && abs(accel_mag - 9.81) > 2.0) {
-       MyBlue.print("[FLAG: BAD_PAD_CALIBRATION] ");
+       Serial2.print("[FLAG: BAD_PAD_CALIBRATION] ");
       }
 
       if(accel_mag >= launch_thresh){
         state = launch;
       }
     break;
+    
     case launch:
     break;
+    
     case coast:
     break;
+    
     case descend:
     break;
   }
 
   if(state == launch){
-
 
   }
 
@@ -159,11 +170,11 @@ void loop() {
   previous_error = current_error;
 }
 
-////////////////////// Functions ////////////////////////////////////////////////////////////
+// ---------------------------------------------------------
+// Helper Functions 
+// ---------------------------------------------------------
 void LSM6DSO32Setup() {
   if (!dso32.begin_I2C()) {
-    // if (!dso32.begin_SPI(LSM_CS)) {
-    // if (!dso32.begin_SPI(LSM_CS, LSM_SCK, LSM_MISO, LSM_MOSI)) {
     Serial.println("Failed to find LSM6DSO32 chip");
     while (1) {
       Serial.println("Failed to find LSM6DSO32 chip");
@@ -176,118 +187,6 @@ void LSM6DSO32Setup() {
   dso32.setGyroRange(LSM6DS_GYRO_RANGE_2000_DPS);
   dso32.setAccelDataRate(LSM6DS_RATE_12_5_HZ);
   dso32.setGyroDataRate(LSM6DS_RATE_12_5_HZ);
-
-  Serial.print("Accelerometer range set to: ");
-  switch (dso32.getAccelRange()) {
-    case LSM6DSO32_ACCEL_RANGE_4_G:
-      Serial.println("+-4G");
-      break;
-    case LSM6DSO32_ACCEL_RANGE_8_G:
-      Serial.println("+-8G");
-      break;
-    case LSM6DSO32_ACCEL_RANGE_16_G:
-      Serial.println("+-16G");
-      break;
-    case LSM6DSO32_ACCEL_RANGE_32_G:
-      Serial.println("+-32G");
-      break;
-  }
-
-  // dso32.setGyroRange(LSM6DS_GYRO_RANGE_250_DPS );
-  Serial.print("Gyro range set to: ");
-  switch (dso32.getGyroRange()) {
-    case LSM6DS_GYRO_RANGE_125_DPS:
-      Serial.println("125 degrees/s");
-      break;
-    case LSM6DS_GYRO_RANGE_250_DPS:
-      Serial.println("250 degrees/s");
-      break;
-    case LSM6DS_GYRO_RANGE_500_DPS:
-      Serial.println("500 degrees/s");
-      break;
-    case LSM6DS_GYRO_RANGE_1000_DPS:
-      Serial.println("1000 degrees/s");
-      break;
-    case LSM6DS_GYRO_RANGE_2000_DPS:
-      Serial.println("2000 degrees/s");
-      break;
-  }
-
-  // dso32.setAccelDataRate(LSM6DS_RATE_12_5_HZ);
-  Serial.print("Accelerometer data rate set to: ");
-  switch (dso32.getAccelDataRate()) {
-    case LSM6DS_RATE_SHUTDOWN:
-      Serial.println("0 Hz");
-      break;
-    case LSM6DS_RATE_12_5_HZ:
-      Serial.println("12.5 Hz");
-      break;
-    case LSM6DS_RATE_26_HZ:
-      Serial.println("26 Hz");
-      break;
-    case LSM6DS_RATE_52_HZ:
-      Serial.println("52 Hz");
-      break;
-    case LSM6DS_RATE_104_HZ:
-      Serial.println("104 Hz");
-      break;
-    case LSM6DS_RATE_208_HZ:
-      Serial.println("208 Hz");
-      break;
-    case LSM6DS_RATE_416_HZ:
-      Serial.println("416 Hz");
-      break;
-    case LSM6DS_RATE_833_HZ:
-      Serial.println("833 Hz");
-      break;
-    case LSM6DS_RATE_1_66K_HZ:
-      Serial.println("1.66 KHz");
-      break;
-    case LSM6DS_RATE_3_33K_HZ:
-      Serial.println("3.33 KHz");
-      break;
-    case LSM6DS_RATE_6_66K_HZ:
-      Serial.println("6.66 KHz");
-      break;
-  }
-
-  // dso32.setGyroDataRate(LSM6DS_RATE_12_5_HZ);
-  Serial.print("Gyro data rate set to: ");
-  switch (dso32.getGyroDataRate()) {
-    case LSM6DS_RATE_SHUTDOWN:
-      Serial.println("0 Hz");
-      break;
-    case LSM6DS_RATE_12_5_HZ:
-      Serial.println("12.5 Hz");
-      break;
-    case LSM6DS_RATE_26_HZ:
-      Serial.println("26 Hz");
-      break;
-    case LSM6DS_RATE_52_HZ:
-      Serial.println("52 Hz");
-      break;
-    case LSM6DS_RATE_104_HZ:
-      Serial.println("104 Hz");
-      break;
-    case LSM6DS_RATE_208_HZ:
-      Serial.println("208 Hz");
-      break;
-    case LSM6DS_RATE_416_HZ:
-      Serial.println("416 Hz");
-      break;
-    case LSM6DS_RATE_833_HZ:
-      Serial.println("833 Hz");
-      break;
-    case LSM6DS_RATE_1_66K_HZ:
-      Serial.println("1.66 KHz");
-      break;
-    case LSM6DS_RATE_3_33K_HZ:
-      Serial.println("3.33 KHz");
-      break;
-    case LSM6DS_RATE_6_66K_HZ:
-      Serial.println("6.66 KHz");
-      break;
-  }
 }
 
 void calibrategyro() {
@@ -303,7 +202,7 @@ void calibrategyro() {
     x_sum += gyro.gyro.x;
     y_sum += gyro.gyro.y;
     z_sum += gyro.gyro.z;
-    delay(2);  // Small delay to prevent reading same register twice instantly
+    delay(2); 
   }
 
   gyroX_offset = x_sum / num_samples;
@@ -315,12 +214,9 @@ void calibrategyro() {
 }
 
 float PIDController(float error, float prev_error) {
-  // Proportional gain
   prop_error = Kp * error;
-  // Integral Error
   total_integrated_error += error;
   integral_error = Ki * error;
-  // Derivative Error
   derivative_error = Kd * (error - prev_error);
 
   float control_output = prop_error + integral_error + derivative_error;
@@ -328,14 +224,11 @@ float PIDController(float error, float prev_error) {
 }
 
 void Kalman_Init(Kalman_t *kf) {
-    // Default tuning parameters
     kf->Q_angle = 0.001f;
     kf->Q_bias = 0.003f;
     kf->R_measure = 0.03f;
-
     kf->angle = 0.0f;
     kf->bias = 0.0f;
-
     kf->P[0][0] = 0.0f; kf->P[0][1] = 0.0f;
     kf->P[1][0] = 0.0f; kf->P[1][1] = 0.0f;
 }
@@ -344,26 +237,21 @@ float Kalman_GetAngle(Kalman_t *kf, float newAngle, float newRate, float dt) {
     kf->rate = newRate - kf->bias;
     kf->angle += dt * kf->rate;
 
-    // Update estimation error covariance
     kf->P[0][0] += dt * (dt * kf->P[1][1] - kf->P[0][1] - kf->P[1][0] + kf->Q_angle);
     kf->P[0][1] -= dt * kf->P[1][1];
     kf->P[1][0] -= dt * kf->P[1][1];
     kf->P[1][1] += kf->Q_bias * dt;
 
-    // Calculate Kalman Gain
     float S = kf->P[0][0] + kf->R_measure;
     float K[2];
     K[0] = kf->P[0][0] / S;
     K[1] = kf->P[1][0] / S;
 
-    // Calculate Angle Difference (Measurement - Predicted)
     float y = newAngle - kf->angle;
 
-    // Correct the state
     kf->angle += K[0] * y;
     kf->bias  += K[1] * y;
 
-    // Update error covariance
     float P00_temp = kf->P[0][0];
     float P01_temp = kf->P[0][1];
 
