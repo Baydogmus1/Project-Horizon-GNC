@@ -78,10 +78,9 @@ void loop() {
   float roll  = Kalman_GetAngle(&KalmanX, accRoll, gyroRateX, dt);
   float pitch = Kalman_GetAngle(&KalmanY, accPitch, gyroRateY, dt);
 
-  // Rate Control Input (Radians/sec as per MATLAB model)
+  // Rate Control Input (Radians/sec)
   current_error = (gyro.gyro.z - gyroZ_offset);
 
-  // Run PID and Motor
   motor_control = PIDController(current_error, previous_error, dt);
   
   digitalWrite(DIR_PIN, (motor_control < 0) ? HIGH : LOW);
@@ -91,13 +90,16 @@ void loop() {
   if(millis() - last_print > 500) {
     Serial2.print("Rate Error: "); Serial2.print(current_error);
     Serial2.print("\tOut Volts: "); Serial2.print(motor_control);
-    Serial2.print("\tRoll: "); Serial2.println(roll);
-    Serial2.println("Pitch: ");  Serial2.print(pitch, 2)
+    Serial2.print("\tRoll: "); Serial2.print(roll, 2);
+    Serial2.print("Pitch: ");  Serial2.println(pitch, 2);
     last_print = millis();
   }
 
   previous_error = current_error;
 }
+
+////////////////////////////////////////////////////////////////////////////////
+////////////////////////////////////////////////////////////////////////////////
 
 void armESC() {
   esc.writeMicroseconds(ESC_MIN_THROTTLE);
