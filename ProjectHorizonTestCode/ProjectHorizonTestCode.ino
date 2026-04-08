@@ -35,17 +35,17 @@ int num_samples = 500;
 
 float current_error, previous_error = 0;
 float prop_error = 0;
-float total_integrated_error, integral_error = 0;
-float derivative_error = 0;
+float total_integrated_error, integral_error = 0; // derivative_error = 0;
 float motor_control = 0; 
 
-float Kp = 15;
-float Ki = 40;
-float Kd = 2;
+float Kp = -2.5873;
+float Ki = -5.9426;
+float Kd = 0;
+const float MAX_PID_OUTPUT = 12.0f; //Battery Voltage
 
-float launch_thresh = 9.81 * 5;
+float launch_thresh = 9.81 * 1.5;
 
-float PIDController(float error, float prev_error); 
+float PIDController(float error, float prev_error, double dt);
 void LSM6DSO32Setup(); 
 void calibrategyro(); 
 void Kalman_Init(Kalman_t *kf); 
@@ -74,7 +74,7 @@ void setup(void) {
 
 void loop() {
   sensors_event_t accel, gyro, temp;
-  unsigned long last_time = millis();
+  static unsigned long last_time = 0;
   double dt = (double)(micros() - timer) / 1000000.0;
   timer = micros();
 
@@ -104,6 +104,7 @@ void loop() {
         Serial2.print("Temp: "); Serial2.print(temp.temperature); Serial2.print("C\t");
         Serial2.print("Roll: "); Serial2.print(roll); Serial2.print("\t");
         Serial2.println("Pitch: "); Serial2.print(pitch); Serial2.print("\t");
+        last_time = millis();
       }
 
       if (state == prelaunch && abs(accel_mag - 9.81) > 2.0) {
@@ -119,8 +120,8 @@ void loop() {
     break;
 
     case coast:
-      motor_control = PIDController(current_error, previous_error);
-      if (motor_control < 1) {
+      motor_control = PIDController(current_error, previous_error, dt);
+      if (motor_control < 0) {
         digitalWrite(DIR_PIN, HIGH);
       } else {
         digitalWrite(DIR_PIN, LOW);
@@ -141,8 +142,12 @@ void armESC() {
 }
 
 void sendESCPWM(float control_signal) {
-  int pulseWidth = map(abs((long)control_signal), 0, 32767, ESC_MIN_THROTTLE, ESC_MAX_THROTTLE);
-  pulseWidth = constrain(pulseWidth, ESC_MIN_THROTTLE, ESC_MAX_THROTTLE);
+  float clamped_volts = constrain(abs(control_signal), 0.0f, MAX_PID_OUTPUT);
+  
+  // Convert voltage to a percentage, then map to ESC range
+  float throttle_percent = clamped_volts / MAX_PID_OUTPUT;
+  int pulseWidth = ESC_MIN_THROTTLE + (throttle_percent * (ESC_MAX_THROTTLE - ESC_MIN_THROTTLE));
+  
   esc.writeMicroseconds(pulseWidth);
 }
 
@@ -153,20 +158,22 @@ void LSM6DSO32Setup() {
 
   dso32.setAccelRange(LSM6DSO32_ACCEL_RANGE_16_G);
   dso32.setGyroRange(LSM6DS_GYRO_RANGE_2000_DPS);
-  dso32.setAccelDataRate(LSM6DS_RATE_12_5_HZ);
-  dso32.setGyroDataRate(LSM6DS_RATE_12_5_HZ);
+  dso32.setAccelDataRate(LSM6DS_RATE_833_HZ);
+  dso32.setGyroDataRate(LSM6DS_RATE_833_HZ);
 }
 
 void calibrategyro() {
   float x_sum = 0, y_sum = 0, z_sum = 0;
 
   for (int i = 0; i < num_samples; i++) {
-    sensors_event_t accel, gyro, temp;
-    dso32.getEvent(&accel, &gyro, &temp);
+  sensors_event_t accel, gyro, temp;
+  dso32.getEvent(&accel, &gyro, &temp);
 
-    x_sum += gyro.gyro.x;
-    y_sum += gyro.gyro.y;
-    z_sum += gyro.gyro.z;
+  x_sum += gyro.gyro.x;
+  y_sum += gyro.gyro.y;
+  z_sum += gyro.gyro.z;
+  
+  delay(10); // Wait 10ms for a new reading
   }
 
   gyroX_offset = x_sum / num_samples;
@@ -174,13 +181,19 @@ void calibrategyro() {
   gyroZ_offset = z_sum / num_samples;
 }
 
-float PIDController(float error, float prev_error) {
+float PIDController(float error, float prev_error, double dt) {
   prop_error = Kp * error;
-  total_integrated_error += error;
-  integral_error = Ki * error;
-  derivative_error = Kd * (error - prev_error);
 
-  return prop_error + integral_error + derivative_error;
+  total_integrated_error += (error * dt);
+  float max_accum = abs(MAX_PID_OUTPUT / Ki); 
+  total_integrated_error = constrain(total_integrated_error, -max_accum, max_accum);
+  integral_error = Ki * total_integrated_error;  
+
+  //derivative_error = Kd * ((error - prev_error) / dt);
+
+  float control_output = prop_error + integral_error + derivative_error;
+  
+  return constrain(control_output, -MAX_PID_OUTPUT, MAX_PID_OUTPUT);
 }
 
 void Kalman_Init(Kalman_t *kf) {
