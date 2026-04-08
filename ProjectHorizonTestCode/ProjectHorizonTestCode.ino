@@ -92,6 +92,7 @@ void loop() {
     Serial2.print("Rate Error: "); Serial2.print(current_error);
     Serial2.print("\tOut Volts: "); Serial2.print(motor_control);
     Serial2.print("\tRoll: "); Serial2.println(roll);
+    Serial2.println("Pitch: ");  Serial2.print(pitch, 2)
     last_print = millis();
   }
 
