@@ -9,8 +9,9 @@ HardwareSerial Serial2(PA3, PA2);
 Servo esc;
 const int ESC_PIN = PA0;
 const int DIR_PIN = PB11;
-const int ESC_MIN_THROTTLE = 1000;
-const int ESC_MAX_THROTTLE = 2000;
+const int ESC_REVERSE_MAX = 1000;
+const int ESC_NEUTRAL     = 1500;
+const int ESC_FORWARD_MAX = 2000;
 
 typedef struct {
   float Q_angle, Q_bias, R_measure;
@@ -32,7 +33,7 @@ float motor_control = 0;
 float Kp = -2.5873;
 float Ki = -5.9426;
 float Kd = 0;
-const float MAX_PID_OUTPUT = 12.0f; 
+const float MAX_PID_OUTPUT = 12.0f; //Battery Voltage
 
 // Prototypes
 float PIDController(float error, float prev_error, double dt);
@@ -43,13 +44,15 @@ float Kalman_GetAngle(Kalman_t *kf, float newAngle, float newRate, float dt);
 void armESC(); 
 void sendESCPWM(float control_signal); 
 
+////////////////////////////////////////////////////////////////////////////////
+////////////////////////////////////////////////////////////////////////////////
+
 void setup(void) {
   Serial.begin(115200);
-  Serial2.begin(115200); 
+  Serial2.begin(115200);
 
-  pinMode(DIR_PIN, OUTPUT);
-  
-  esc.attach(ESC_PIN, ESC_MIN_THROTTLE, ESC_MAX_THROTTLE);
+  // Fixed the attach variables
+  esc.attach(ESC_PIN, ESC_REVERSE_MAX, ESC_FORWARD_MAX);
   armESC();
 
   LSM6DSO32Setup();
@@ -83,7 +86,7 @@ void loop() {
 
   motor_control = PIDController(current_error, previous_error, dt);
   
-  digitalWrite(DIR_PIN, (motor_control < 0) ? HIGH : LOW);
+  // Removed the unnecessary DIR_PIN digitalWrite
   sendESCPWM(motor_control);
 
   // Bluetooth Telemetry
@@ -91,7 +94,7 @@ void loop() {
     Serial2.print("Rate Error: "); Serial2.print(current_error);
     Serial2.print("\tOut Volts: "); Serial2.print(motor_control);
     Serial2.print("\tRoll: "); Serial2.print(roll, 2);
-    Serial2.print("Pitch: ");  Serial2.println(pitch, 2);
+    Serial2.print("\tPitch: ");  Serial2.println(pitch, 2);
     last_print = millis();
   }
 
@@ -102,20 +105,23 @@ void loop() {
 ////////////////////////////////////////////////////////////////////////////////
 
 void armESC() {
-  esc.writeMicroseconds(ESC_MIN_THROTTLE);
+  esc.writeMicroseconds(ESC_NEUTRAL);
   delay(2000); 
 }
 
 void sendESCPWM(float control_signal) {
-  // Deadband: If error is tiny, don't hum/spin the motor
-  if (abs(control_signal) < 0.1) {
-    esc.writeMicroseconds(ESC_MIN_THROTTLE);
+  // Deadband: Prevents the motor from jittering/humming when near zero
+  if (abs(control_signal) < 0.05) {
+    esc.writeMicroseconds(ESC_NEUTRAL);
     return;
   }
 
-  float clamped_volts = constrain(abs(control_signal), 0.0f, MAX_PID_OUTPUT);
-  float throttle_percent = clamped_volts / MAX_PID_OUTPUT;
-  int pulseWidth = ESC_MIN_THROTTLE + (int)(throttle_percent * (ESC_MAX_THROTTLE - ESC_MIN_THROTTLE));
+  
+  float throttle_ratio = control_signal / MAX_PID_OUTPUT; // Result is -1.0 to 1.0
+  int pulseWidth = ESC_NEUTRAL + (int)(throttle_ratio * 500);
+  
+  // Safety constraint
+  pulseWidth = constrain(pulseWidth, ESC_REVERSE_MAX, ESC_FORWARD_MAX);
   
   esc.writeMicroseconds(pulseWidth);
 }
@@ -126,9 +132,15 @@ float PIDController(float error, float prev_error, double dt) {
   prop_error = Kp * error;
 
   total_integrated_error += (error * dt);
-  float max_accum = abs(MAX_PID_OUTPUT / Ki); 
-  total_integrated_error = constrain(total_integrated_error, -max_accum, max_accum);
-  integral_error = Ki * total_integrated_error;  
+  
+  if (Ki != 0) {
+      float max_accum = abs(MAX_PID_OUTPUT / Ki); 
+      total_integrated_error = constrain(total_integrated_error, -max_accum, max_accum);
+      integral_error = Ki * total_integrated_error;
+  } else {
+      integral_error = 0;
+      total_integrated_error = 0;
+  }
 
   derivative_error = Kd * ((error - prev_error) / dt);
 
@@ -141,7 +153,7 @@ void LSM6DSO32Setup() {
   dso32.setAccelRange(LSM6DSO32_ACCEL_RANGE_16_G);
   dso32.setGyroRange(LSM6DS_GYRO_RANGE_2000_DPS);
   dso32.setAccelDataRate(LSM6DS_RATE_6_66K_HZ);
-  dso32.setGyroDataRate(LLSM6DS_RATE_6_66K_HZ);
+  dso32.setGyroDataRate(LSM6DS_RATE_6_66K_HZ);
 }
 
 void calibrategyro() {
