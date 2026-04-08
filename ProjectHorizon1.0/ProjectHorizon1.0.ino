@@ -1,100 +1,80 @@
 #include <Adafruit_LSM6DSO32.h>
 #include <Adafruit_Sensor.h>
 #include <Wire.h>
+#include <Servo.h> 
 
-// ---------------------------------------------------------
-// Objects and Variables
-// ---------------------------------------------------------
-Adafruit_LSM6DSO32 dso32;    // Adafruit LSM6DS Library Use for Accelerometer
-
-// Instantiate Hardware Serial2 for Bluetooth (RX = PA3, TX = PA2)
+Adafruit_LSM6DSO32 dso32;
 HardwareSerial Serial2(PA3, PA2);
 
-enum {
-  prelaunch,
-  launch,
-  coast,
-  descend
-} state = prelaunch;
+Servo esc;
+const int ESC_PIN = PA0;
+const int DIR_PIN = PB11;
+const int ESC_MIN_THROTTLE = 1000;
+const int ESC_MAX_THROTTLE = 2000;
+
+enum { prelaunch, launch, coast, descend } state = prelaunch;
 
 typedef struct {
-  float Q_angle;   // Process noise: Uncertainty in the angle evolution
-  float Q_bias;    // Process noise: Uncertainty in the gyro bias
-  float R_measure; // Measurement noise: Uncertainty in the accelerometer measure
-
-  float angle;     // The calculated angle (OUTPUT)
-  float bias;      // The calculated gyro bias
-  float rate;      // Unbiased rate
-
-  float P[2][2];   // Error covariance matrix
+  float Q_angle;
+  float Q_bias;
+  float R_measure;
+  float angle;
+  float bias;
+  float rate;
+  float P[2][2];
 } Kalman_t;
 
-// Kalman Filter
-Kalman_t KalmanX; // For Roll
-Kalman_t KalmanY; // For Pitch
+Kalman_t KalmanX;
+Kalman_t KalmanY;
 uint32_t timer;
 
-// Calibration Variables
 float gyroX_offset = 0;
 float gyroY_offset = 0;
 float gyroZ_offset = 0;
 int num_samples = 500;
 
-// PID Variables
 float current_error, previous_error = 0;
 float prop_error = 0;
-float total_integrated_error, integral_error = 0;
-float derivative_error = 0;
-float motor_control, motor_speed = 0;
+float total_integrated_error, integral_error = 0; // derivative_error = 0;
+float motor_control = 0; 
 
-// PID Gains
-float Kp = 15;
-float Ki = 40;
-float Kd = 2;
+float Kp = -2.5873;
+float Ki = -5.9426;
+float Kd = 0;
+const float MAX_PID_OUTPUT = 12.0f; //Battery Voltage
 
-float launch_thresh = 9.81 * 5; // Threshold for when sensor detects launch, g * Number
+float launch_thresh = 9.81 * 1.5;
 
-// Function Prototypes
-float PIDController(float error, float prev_error); 
+float PIDController(float error, float prev_error, double dt);
 void LSM6DSO32Setup(); 
 void calibrategyro(); 
 void Kalman_Init(Kalman_t *kf); 
 float Kalman_GetAngle(Kalman_t *kf, float newAngle, float newRate, float dt); 
+void armESC(); 
+void sendESCPWM(float control_signal); 
 
-// ---------------------------------------------------------
-// Main Setup
-// ---------------------------------------------------------
 void setup(void) {
-  Serial.begin(115200);  // USB to PC
-  
-  // Start Hardware Serial2 for Bluetooth 
+  Serial.begin(115200);
   Serial2.begin(115200); 
 
-  // Removed the 'while (!Serial)' trap so the rocket can run on battery!
-  delay(1000); // Give sensors a moment to power up
+  esc.attach(ESC_PIN, ESC_MIN_THROTTLE, ESC_MAX_THROTTLE);
+  armESC();
 
-  // LSM connections and calibration
-  Serial.println("LSM6DSO32 test!");
+  delay(100); 
+
   LSM6DSO32Setup();
   calibrategyro();
 
-  // Initialize Kalman filter parameters
   Kalman_Init(&KalmanX);
   Kalman_Init(&KalmanY);
-  timer = micros(); // Start timer
+  timer = micros();
 
-  Serial.println("");
-
-  //Initialize Pin for motor direction control
-  pinMode(B11, OUTPUT);
+  pinMode(DIR_PIN, OUTPUT);
 }
 
-// ---------------------------------------------------------
-// Main Loop
-// ---------------------------------------------------------
 void loop() {
   sensors_event_t accel, gyro, temp;
-  unsigned long last_time = millis();
+  static unsigned long last_time = 0;
   double dt = (double)(micros() - timer) / 1000000.0;
   timer = micros();
 
@@ -110,26 +90,23 @@ void loop() {
   float roll  = Kalman_GetAngle(&KalmanX, accRoll, gyroRateX, dt);
   float pitch = Kalman_GetAngle(&KalmanY, accPitch, gyroRateY, dt);
 
-  current_error = (gyro.gyro.z - gyroZ_offset) * 57.29578f;
+  current_error = (gyro.gyro.z - gyroZ_offset);
 
   switch(state){
     case prelaunch:
-      if(millis() - last_time > 1000)
-      {
-        // 2. Print Acceleration Data to Bluetooth
+      if(millis() - last_time > 1000) {
         Serial2.print("Acc[X,Y,Z]: [");
         Serial2.print(accel.acceleration.x); Serial2.print(", ");
         Serial2.print(accel.acceleration.y); Serial2.print(", ");
         Serial2.print(accel.acceleration.z); Serial2.print("]\t");
         Serial2.print("Mag: "); Serial2.print(accel_mag); Serial2.print("\t");
 
-        // 3. Print Orientation & Temp to Bluetooth
         Serial2.print("Temp: "); Serial2.print(temp.temperature); Serial2.print("C\t");
         Serial2.print("Roll: "); Serial2.print(roll); Serial2.print("\t");
         Serial2.println("Pitch: "); Serial2.print(pitch); Serial2.print("\t");
+        last_time = millis();
       }
 
-      // If in prelaunch, gravity magnitude should be ~9.81. If it's off by more than 2 m/s^2, flag it.
       if (state == prelaunch && abs(accel_mag - 9.81) > 2.0) {
        Serial2.print("[FLAG: BAD_PAD_CALIBRATION] ");
       }
@@ -141,86 +118,82 @@ void loop() {
     
     case launch:
     break;
-    
+
     case coast:
+      motor_control = PIDController(current_error, previous_error, dt);
+      if (motor_control < 0) {
+        digitalWrite(DIR_PIN, HIGH);
+      } else {
+        digitalWrite(DIR_PIN, LOW);
+      }
+      sendESCPWM(motor_control);
     break;
     
     case descend:
     break;
   }
 
-  if(state == launch){
-
-  }
-
-  if(state == coast) {
-    motor_control = PIDController(current_error, previous_error);
-
-      if (motor_control < 1) {
-        digitalWrite(B11, HIGH);
-      }       
-    else digitalWrite(B11, LOW);
-
-    //mapping motor_control value to PWM duty cycle
-    motor_speed = map(abs(motor_control), 0, 32767, 0, 255);
-    analogWrite(A0, motor_speed);
-  }
-
-  //Save current error for derivative use
   previous_error = current_error;
 }
 
-// ---------------------------------------------------------
-// Helper Functions 
-// ---------------------------------------------------------
+void armESC() {
+  esc.writeMicroseconds(ESC_MIN_THROTTLE);
+  delay(1000); 
+}
+
+void sendESCPWM(float control_signal) {
+  float clamped_volts = constrain(abs(control_signal), 0.0f, MAX_PID_OUTPUT);
+  
+  // Convert voltage to a percentage, then map to ESC range
+  float throttle_percent = clamped_volts / MAX_PID_OUTPUT;
+  int pulseWidth = ESC_MIN_THROTTLE + (throttle_percent * (ESC_MAX_THROTTLE - ESC_MIN_THROTTLE));
+  
+  esc.writeMicroseconds(pulseWidth);
+}
+
 void LSM6DSO32Setup() {
   if (!dso32.begin_I2C()) {
-    Serial.println("Failed to find LSM6DSO32 chip");
-    while (1) {
-      Serial.println("Failed to find LSM6DSO32 chip");
-      delay(10);
-    }
+    while (1); 
   }
-  Serial.println("LSM6DSO32 Found!");
 
   dso32.setAccelRange(LSM6DSO32_ACCEL_RANGE_16_G);
   dso32.setGyroRange(LSM6DS_GYRO_RANGE_2000_DPS);
-  dso32.setAccelDataRate(LSM6DS_RATE_12_5_HZ);
-  dso32.setGyroDataRate(LSM6DS_RATE_12_5_HZ);
+  dso32.setAccelDataRate(LSM6DS_RATE_833_HZ);
+  dso32.setGyroDataRate(LSM6DS_RATE_833_HZ);
 }
 
 void calibrategyro() {
-  Serial.println("Keep device still. Calibrating Gyro...");
-  float x_sum = 0;
-  float y_sum = 0;
-  float z_sum = 0;
+  float x_sum = 0, y_sum = 0, z_sum = 0;
 
   for (int i = 0; i < num_samples; i++) {
-    sensors_event_t accel, gyro, temp;
-    dso32.getEvent(&accel, &gyro, &temp);
+  sensors_event_t accel, gyro, temp;
+  dso32.getEvent(&accel, &gyro, &temp);
 
-    x_sum += gyro.gyro.x;
-    y_sum += gyro.gyro.y;
-    z_sum += gyro.gyro.z;
-    delay(2); 
+  x_sum += gyro.gyro.x;
+  y_sum += gyro.gyro.y;
+  z_sum += gyro.gyro.z;
+  
+  delay(10); // Wait 10ms for a new reading
   }
 
   gyroX_offset = x_sum / num_samples;
   gyroY_offset = y_sum / num_samples;
   gyroZ_offset = z_sum / num_samples;
-
-  Serial.print("Calibration Complete. Z Offset: ");
-  Serial.println(gyroZ_offset);
 }
 
-float PIDController(float error, float prev_error) {
+float PIDController(float error, float prev_error, double dt) {
   prop_error = Kp * error;
-  total_integrated_error += error;
-  integral_error = Ki * error;
-  derivative_error = Kd * (error - prev_error);
+
+  total_integrated_error += (error * dt);
+  float max_accum = abs(MAX_PID_OUTPUT / Ki); 
+  total_integrated_error = constrain(total_integrated_error, -max_accum, max_accum);
+  integral_error = Ki * total_integrated_error;  
+
+  //derivative_error = Kd * ((error - prev_error) / dt);
 
   float control_output = prop_error + integral_error + derivative_error;
-  return control_output;
+  
+  return constrain(control_output, -MAX_PID_OUTPUT, MAX_PID_OUTPUT);
 }
 
 void Kalman_Init(Kalman_t *kf) {
