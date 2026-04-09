@@ -4,11 +4,9 @@
 #include <Servo.h> 
 
 Adafruit_LSM6DSO32 dso32;
-HardwareSerial Serial2(PA3, PA2);
 
 Servo esc;
 const int ESC_PIN = PA0;
-const int DIR_PIN = PB11;
 const int ESC_REVERSE_MAX = 1000;
 const int ESC_NEUTRAL     = 1500;
 const int ESC_FORWARD_MAX = 2000;
@@ -31,7 +29,7 @@ float motor_control = 0;
 
 // MATLAB GAINS
 float Kp = -2.5873;
-float Ki = -5.9426;
+float Ki = 0; //-5.9426;
 float Kd = 0;
 const float MAX_PID_OUTPUT = 12.0f; //Battery Voltage
 
@@ -42,21 +40,36 @@ void calibrategyro();
 void Kalman_Init(Kalman_t *kf); 
 float Kalman_GetAngle(Kalman_t *kf, float newAngle, float newRate, float dt); 
 void armESC(); 
-void sendESCPWM(float control_signal); 
+int sendESCPWM(float control_signal); // Updated to return the PWM value
 
 ////////////////////////////////////////////////////////////////////////////////
 ////////////////////////////////////////////////////////////////////////////////
 
 void setup(void) {
   Serial.begin(115200);
-  Serial2.begin(115200);
+  
+  // Explicitly set the RX and TX pins for the built-in Serial2
+  Serial2.setRx(PA3);
+  Serial2.setTx(PA2);
+  Serial2.begin(9600); // Set to 9600 to match default HC-05 Data Mode
 
-  // Fixed the attach variables
+  // Wait for USB Serial to connect so you don't miss the boot sequence
+  uint32_t timeout = millis();
+  while (!Serial && (millis() - timeout < 3000)) {}
+
+  Serial.println("System Booting...");
+
+  // Attach and Arm the physical ESC
   esc.attach(ESC_PIN, ESC_REVERSE_MAX, ESC_FORWARD_MAX);
+  Serial.println("Arming ESC...");
   armESC();
 
   LSM6DSO32Setup();
+  Serial.println("Sensor Initialized.");
+  
+  Serial.println("Calibrating Gyro... Do not move the sensor!");
   calibrategyro();
+  Serial.println("Calibration Complete.");
 
   Kalman_Init(&KalmanX);
   Kalman_Init(&KalmanY);
@@ -86,15 +99,27 @@ void loop() {
 
   motor_control = PIDController(current_error, previous_error, dt);
   
-  // Removed the unnecessary DIR_PIN digitalWrite
-  sendESCPWM(motor_control);
+  // Send the signal to the ESC and grab the resulting pulse width
+  int current_pwm = sendESCPWM(motor_control);
 
-  // Bluetooth Telemetry
-  if(millis() - last_print > 500) {
-    Serial2.print("Rate Error: "); Serial2.print(current_error);
-    Serial2.print("\tOut Volts: "); Serial2.print(motor_control);
-    Serial2.print("\tRoll: "); Serial2.print(roll, 2);
-    Serial2.print("\tPitch: ");  Serial2.println(pitch, 2);
+  // Telemetry output to both USB Serial and Bluetooth Serial2
+  // Set to 100ms (10Hz) to prevent buffer overflows on 9600 baud Bluetooth
+  if(millis() - last_print > 100) { 
+    
+    // --- USB Serial Output (PC) ---
+    Serial.print("RErr:");   Serial.print(current_error, 2);
+    Serial.print("\tV:");    Serial.print(motor_control, 2);
+    Serial.print("\tPWM:");  Serial.print(current_pwm);
+    Serial.print("\tR:");    Serial.print(roll, 2);
+    Serial.print("\tP:");    Serial.println(pitch, 2);
+    
+    // --- Bluetooth Serial2 Output (Phone) ---
+    Serial2.print("RErr:");  Serial2.print(current_error, 2);
+    Serial2.print("\tV:");   Serial2.print(motor_control, 2);
+    Serial2.print("\tPWM:"); Serial2.print(current_pwm);
+    Serial2.print("\tR:");   Serial2.print(roll, 2);
+    Serial2.print("\tP:");   Serial2.println(pitch, 2);
+    
     last_print = millis();
   }
 
@@ -109,13 +134,12 @@ void armESC() {
   delay(2000); 
 }
 
-void sendESCPWM(float control_signal) {
+int sendESCPWM(float control_signal) {
   // Deadband: Prevents the motor from jittering/humming when near zero
   if (abs(control_signal) < 0.05) {
     esc.writeMicroseconds(ESC_NEUTRAL);
-    return;
+    return ESC_NEUTRAL;
   }
-
   
   float throttle_ratio = control_signal / MAX_PID_OUTPUT; // Result is -1.0 to 1.0
   int pulseWidth = ESC_NEUTRAL + (int)(throttle_ratio * 500);
@@ -123,7 +147,11 @@ void sendESCPWM(float control_signal) {
   // Safety constraint
   pulseWidth = constrain(pulseWidth, ESC_REVERSE_MAX, ESC_FORWARD_MAX);
   
+  // Write to the actual hardware pin
   esc.writeMicroseconds(pulseWidth);
+  
+  // Return the value for telemetry printing
+  return pulseWidth;
 }
 
 float PIDController(float error, float prev_error, double dt) {
@@ -149,7 +177,18 @@ float PIDController(float error, float prev_error, double dt) {
 }
 
 void LSM6DSO32Setup() {
-  if (!dso32.begin_I2C()) while (1); 
+  // Force the I2C pins BEFORE calling begin_I2C()
+  Wire.setSCL(PB6);
+  Wire.setSDA(PB7);
+  Wire.begin();
+
+  if (!dso32.begin_I2C()){
+    while(1){
+      Serial.println("I2C Not Found");
+      delay(500);
+    }
+  }
+  
   dso32.setAccelRange(LSM6DSO32_ACCEL_RANGE_16_G);
   dso32.setGyroRange(LSM6DS_GYRO_RANGE_2000_DPS);
   dso32.setAccelDataRate(LSM6DS_RATE_6_66K_HZ);
