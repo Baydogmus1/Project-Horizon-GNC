@@ -4,13 +4,13 @@
 #include <Servo.h> 
 
 Adafruit_LSM6DSO32 dso32;
-HardwareSerial Serial2(PA3, PA2);
 
 Servo esc;
 const int ESC_PIN = PA0;
-const int DIR_PIN = PB11;
-const int ESC_MIN_THROTTLE = 1000;
-const int ESC_MAX_THROTTLE = 2000;
+const int LED_PIN = PB13; 
+const int ESC_REVERSE_MAX = 1000;
+const int ESC_NEUTRAL     = 1500;
+const int ESC_FORWARD_MAX = 2000;
 
 enum { prelaunch, launch, coast, descend } state = prelaunch;
 
@@ -35,7 +35,8 @@ int num_samples = 500;
 
 float current_error, previous_error = 0;
 float prop_error = 0;
-float total_integrated_error, integral_error = 0; // derivative_error = 0;
+float total_integrated_error, integral_error = 0; 
+float derivative_error = 0; // Un-commented this so the PID compiles
 float motor_control = 0; 
 
 float Kp = -2.5873;
@@ -54,22 +55,36 @@ void armESC();
 void sendESCPWM(float control_signal); 
 
 void setup(void) {
-  Serial.begin(115200);
-  Serial2.begin(115200); 
-
-  esc.attach(ESC_PIN, ESC_MIN_THROTTLE, ESC_MAX_THROTTLE);
+  // 1. INSTANT ESC ARMING (Bidirectional = 1500 Neutral)
+  // Doing this first prevents the ESC from timing out while the sensor calibrates
+  esc.attach(ESC_PIN, ESC_REVERSE_MAX, ESC_FORWARD_MAX);
   armESC();
 
-  delay(100); 
+  // 2. Serial Initialization
+  Serial.begin(115200);
+  
+  // Explicitly set the RX and TX pins for the built-in Serial2 (Bluetooth)
+  Serial2.setRx(PA3);
+  Serial2.setTx(PA2);
+  Serial2.begin(9600); 
 
+  // Wait for USB Serial to connect so you don't miss the boot sequence
+  uint32_t timeout = millis();
+  while (!Serial && (millis() - timeout < 3000)) {}
+
+  Serial.println("System Booting...");
+
+  // 3. Sensor Initialization
   LSM6DSO32Setup();
+  Serial.println("Calibrating Gyro...");
   calibrategyro();
+  Serial.println("Calibration Complete.");
 
   Kalman_Init(&KalmanX);
   Kalman_Init(&KalmanY);
   timer = micros();
 
-  pinMode(DIR_PIN, OUTPUT);
+  pinMode(LED_PIN, OUTPUT);
 }
 
 void loop() {
@@ -95,6 +110,8 @@ void loop() {
   switch(state){
     case prelaunch:
       if(millis() - last_time > 1000) {
+        Serial.println("STATE: PRELAUNCH"); // Added to USB Serial
+        
         Serial2.print("Acc[X,Y,Z]: [");
         Serial2.print(accel.acceleration.x); Serial2.print(", ");
         Serial2.print(accel.acceleration.y); Serial2.print(", ");
@@ -103,33 +120,40 @@ void loop() {
 
         Serial2.print("Temp: "); Serial2.print(temp.temperature); Serial2.print("C\t");
         Serial2.print("Roll: "); Serial2.print(roll); Serial2.print("\t");
-        Serial2.println("Pitch: "); Serial2.print(pitch); Serial2.print("\t");
+        Serial2.print("Pitch: "); Serial2.println(pitch); // Fixed to println
         last_time = millis();
       }
 
-      if (state == prelaunch && abs(accel_mag - 9.81) > 2.0) {
+      if (abs(accel_mag - 9.81) > 2.0) {
        Serial2.print("[FLAG: BAD_PAD_CALIBRATION] ");
       }
 
       if(accel_mag >= launch_thresh){
         state = launch;
+        Serial.println("LAUNCH DETECTED!");
+        Serial2.println("LAUNCH DETECTED!");
       }
     break;
     
     case launch:
+      // Add transition logic to coast here
+      state = coast; 
     break;
 
     case coast:
       motor_control = PIDController(current_error, previous_error, dt);
+      
       if (motor_control < 0) {
-        digitalWrite(DIR_PIN, HIGH);
+        digitalWrite(LED_PIN, HIGH); // Just lighting up an LED for debugging
       } else {
-        digitalWrite(DIR_PIN, LOW);
+        digitalWrite(LED_PIN, LOW);
       }
+      
       sendESCPWM(motor_control);
     break;
     
     case descend:
+      esc.writeMicroseconds(ESC_NEUTRAL); // Kill motor on descent
     break;
   }
 
@@ -137,23 +161,43 @@ void loop() {
 }
 
 void armESC() {
-  esc.writeMicroseconds(ESC_MIN_THROTTLE);
+  esc.writeMicroseconds(ESC_NEUTRAL);
   delay(1000); 
 }
 
 void sendESCPWM(float control_signal) {
-  float clamped_volts = constrain(abs(control_signal), 0.0f, MAX_PID_OUTPUT);
+  // Deadband to prevent motor jittering when near zero
+  if (abs(control_signal) < 0.05) {
+    esc.writeMicroseconds(ESC_NEUTRAL);
+    return;
+  }
+
+  // 1. Convert voltage (-12V to +12V) into a ratio (-1.0 to 1.0)
+  float throttle_ratio = control_signal / MAX_PID_OUTPUT; 
   
-  // Convert voltage to a percentage, then map to ESC range
-  float throttle_percent = clamped_volts / MAX_PID_OUTPUT;
-  int pulseWidth = ESC_MIN_THROTTLE + (throttle_percent * (ESC_MAX_THROTTLE - ESC_MIN_THROTTLE));
+  // 2. Map the ratio to the Bidirectional PWM range
+  // 0 * 500 = 0 (1500us center)
+  // 1.0 * 500 = 500 (2000us max forward)
+  // -1.0 * 500 = -500 (1000us max reverse)
+  int pulseWidth = ESC_NEUTRAL + (int)(throttle_ratio * 500);
+  
+  // 3. Constrain for safety
+  pulseWidth = constrain(pulseWidth, ESC_REVERSE_MAX, ESC_FORWARD_MAX);
   
   esc.writeMicroseconds(pulseWidth);
 }
 
 void LSM6DSO32Setup() {
+  // Force the I2C pins BEFORE calling begin_I2C()
+  Wire.setSCL(PB6);
+  Wire.setSDA(PB7);
+  Wire.begin();
+
   if (!dso32.begin_I2C()) {
-    while (1); 
+    while (1) {
+      Serial.println("I2C Not Found");
+      delay(500);
+    }
   }
 
   dso32.setAccelRange(LSM6DSO32_ACCEL_RANGE_16_G);
@@ -166,14 +210,14 @@ void calibrategyro() {
   float x_sum = 0, y_sum = 0, z_sum = 0;
 
   for (int i = 0; i < num_samples; i++) {
-  sensors_event_t accel, gyro, temp;
-  dso32.getEvent(&accel, &gyro, &temp);
+    sensors_event_t accel, gyro, temp;
+    dso32.getEvent(&accel, &gyro, &temp);
 
-  x_sum += gyro.gyro.x;
-  y_sum += gyro.gyro.y;
-  z_sum += gyro.gyro.z;
-  
-  delay(10); // Wait 10ms for a new reading
+    x_sum += gyro.gyro.x;
+    y_sum += gyro.gyro.y;
+    z_sum += gyro.gyro.z;
+    
+    delay(10); // Wait 10ms for a new reading
   }
 
   gyroX_offset = x_sum / num_samples;
@@ -182,14 +226,20 @@ void calibrategyro() {
 }
 
 float PIDController(float error, float prev_error, double dt) {
+  if (dt <= 0.0) return 0.0;
+
   prop_error = Kp * error;
 
   total_integrated_error += (error * dt);
-  float max_accum = abs(MAX_PID_OUTPUT / Ki); 
-  total_integrated_error = constrain(total_integrated_error, -max_accum, max_accum);
-  integral_error = Ki * total_integrated_error;  
+  if (Ki != 0) {
+      float max_accum = abs(MAX_PID_OUTPUT / Ki); 
+      total_integrated_error = constrain(total_integrated_error, -max_accum, max_accum);
+      integral_error = Ki * total_integrated_error;  
+  } else {
+      integral_error = 0;
+  }
 
-  //derivative_error = Kd * ((error - prev_error) / dt);
+  derivative_error = Kd * ((error - prev_error) / dt);
 
   float control_output = prop_error + integral_error + derivative_error;
   
